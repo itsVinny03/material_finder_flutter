@@ -711,11 +711,79 @@ class _SoftwareWebViewScreenState extends State<SoftwareWebViewScreen> with Widg
     }
   }
 
+  // New Vincent Code Start: 03-11-2026
+  // Barcode scanner for Iframe
+  Future<void> _openBarcodeScannerForIframe({String targetInputId = 'newMaterialTag'}) async {
+    try {
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const BarcodeScannerScreen()),
+      );
+      if (result != null && result is String && result.isNotEmpty) {
+        await _injectBarcodeIntoIframe(result, targetInputId: targetInputId);
+      }
+    } catch (e) {
+      debugPrint('Error opening barcode scanner for iframe: $e');
+    }
+  }
+
+  // Inject barcode into iframe input field
+  Future<void> _injectBarcodeIntoIframe(String barcode, {String targetInputId = 'newMaterialTag'}) async {
+    if (webViewController != null) {
+      try {
+        String safeBarcode = barcode.replaceAll("'", "\\'").replaceAll('"', '\\"');
+        String jsCode = '''
+        (function() {
+          async function run() {
+            for (const iframe of document.querySelectorAll('iframe')) {
+              try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                if (!iframeDoc) continue;
+                const input = iframeDoc.getElementById('$targetInputId');
+                if (!input) continue;
+        
+                // Directly set value — no change/blur to avoid triggering AJAX validation
+                input.value = '$safeBarcode';
+        
+                // Only fire input event for React/Vue compatibility, NOT change/blur
+                input.dispatchEvent(new Event('input', { bubbles: false, cancelable: false }));
+        
+                return 'success';
+              } catch(e) {
+                console.log('iframe inject error:', e);
+              }
+            }
+            return 'not_found';
+          }
+          run();
+        })();
+        ''';
+
+        await webViewController!.evaluateJavascript(source: jsCode);
+
+        Fluttertoast.showToast(
+          msg: _currentLanguageFlag == 2
+              ? "バーコードが入力されました: $barcode"
+              : "Barcode entered: $barcode",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.BOTTOM,
+          backgroundColor: Colors.green,
+          textColor: Colors.white,
+        );
+      } catch (e) {
+        debugPrint('Error injecting barcode into iframe: $e');
+      }
+    }
+  }
+
+
+  // New Vincent Code End: 03-11-2026
+
   Future<void> _setupInputFieldDetection() async {
     if (webViewController != null) {
       String jsCode = '''
 (function() {
-  function injectBarcodeButton(doc, inputId) {
+  function injectBarcodeButton(doc, inputId, isIframe) {
     let button;
     let container;
 
@@ -751,8 +819,13 @@ class _SoftwareWebViewScreenState extends State<SoftwareWebViewScreen> with Widg
         \`;
         button.onclick = function(e) {
           e.stopPropagation();
-          // Call back to Flutter from the top window context
+         if (isIframe) {
+            // Call iframe handler from the top window context
+            window.top.flutter_inappwebview.callHandler('openBarcodeScannerIframe', inputId);
+         } else {
+           // Call back to Flutter from the top window context
           window.top.flutter_inappwebview.callHandler('openBarcodeScanner', inputId);
+         }
         };
         container.appendChild(button);
       }
@@ -787,7 +860,7 @@ class _SoftwareWebViewScreenState extends State<SoftwareWebViewScreen> with Widg
         try {
           const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
           if (iframeDoc && iframeDoc.body) {
-            injectBarcodeButton(iframeDoc, 'newMaterialTag');
+            injectBarcodeButton(iframeDoc, 'newMaterialTag', true);
           }
         } catch(e) {
           console.log('iframe injection error:', e);
@@ -1368,6 +1441,16 @@ class _SoftwareWebViewScreenState extends State<SoftwareWebViewScreen> with Widg
                         String inputId = args.isNotEmpty ? args[0].toString() : 'withdrawalInventory ';
                         _openBarcodeScanner(targetInputId: inputId);
                       },
+                    );
+
+                    controller.addJavaScriptHandler(
+                      handlerName: 'openBarcodeScannerIframe',
+                      callback: (args) {
+                        String inputId = args.isNotEmpty
+                            ? args[0].toString()
+                            : 'newMaterialTag';
+                        _openBarcodeScannerForIframe(targetInputId: inputId);
+                      }
                     );
                   },
                   onLoadStart: (controller, url) {
